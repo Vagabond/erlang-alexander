@@ -16,12 +16,16 @@ parse_transform(AST, _Options) ->
 check() ->
     true.
 
-enter(_Signature) ->
-    io:format("entering blocking call ~p~n", [_Signature]),
+enter({TargetMod, TargetFun, Module, Function, Line, Destination} = Signature) ->
+    io:format("entering blocking call to ~s:~s in function ~s:~s line ~b with destination ~p~n", [TargetMod, TargetFun, Module, Function, Line, Destination]),
+    %% search for someone in the chain that is calling us
+    check_loop(self(), Destination),
+    erlang:put('__alexander', Signature),
     ok.
 
 exit() ->
     io:format("exiting blocking call~n"),
+    erlang:erase('__alexander'),
     ok.
 
 %%====================================================================
@@ -34,6 +38,7 @@ walk_ast(Acc, [{attribute, _, module, Module}=H|T]) ->
     put(module, Module),
     walk_ast([H|Acc], T);
 walk_ast(Acc, [{function, Line, Name, Arity, Clauses}|T]) ->
+    put(function, Name),
     walk_ast([{function, Line, Name, Arity,
                 walk_clauses([], Clauses)}|Acc], T);
 walk_ast(Acc, [H|T]) ->
@@ -55,10 +60,11 @@ transform_statement({call, Line, {remote, _Line1, {atom, _Line2, Module},
     Signature = {Module, Function, length(Arguments0)},
     case lists:member(Signature, Targets) of
         true ->
-            io:format("detected signature on line ~p~n", [Line]),
+            {Destination, NewStmt} = extract(Signature, Line, Arguments0),
+            io:format("detected signature on line ~p ~p~n", [Line, Arguments0]),
             lists:reverse([{call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, enter}},
-              [{tuple, Line, [{atom, Line, Module}, {atom, Line, Function}, {atom, Line, get(module)}, {integer, Line, Line}]}]},
-              Stmt,
+              [{tuple, Line, [{atom, Line, Module}, {atom, Line, Function}, {atom, Line, get(module)}, {atom, Line, get(function)}, {integer, Line, Line}, Destination]}]},
+              NewStmt,
             {call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, exit}},[]}]);
         false ->
             list_to_tuple(transform_statement(tuple_to_list(Stmt), Targets))
@@ -69,4 +75,29 @@ transform_statement(Stmt, Targets) when is_list(Stmt) ->
     [transform_statement(S, Targets) || S <- Stmt];
 transform_statement(Stmt, _Targets) ->
     Stmt.
+
+extract({gen_server, call, 2}, Line, Arguments = [Destination, _Msg]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, gen_server}, {atom, Line, call}}, Arguments ++ [{atom, Line, infinity}]}};
+extract({gen_server, call, 3}, Line, [Destination, Msg |_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, gen_server}, {atom, Line, call}}, [Destination, Msg, {atom, Line, infinity}]}}.
+
+
+check_loop(Source, Destination) ->
+    Pid = case Destination of
+              D when is_pid(D) -> D;
+              D when is_atom(D) -> whereis(D)
+          end,
+    case Pid == Source of
+        true ->
+            erlang:throw(call_loop_detected);
+        false ->
+            ok
+    end,
+    [{dictionary, Dict}] = erlang:process_info(Pid, [dictionary]),
+    case lists:keyfind('__alexander', 1, Dict) of
+        false ->
+            ok;
+        {'__alexander', {_TargetMod, _TargetFun, _Module, _Function, _Line, NewDestination}} ->
+            check_loop(Source, NewDestination)
+    end.
 
