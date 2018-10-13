@@ -17,14 +17,14 @@ check() ->
     true.
 
 enter({TargetMod, TargetFun, Module, Function, Line, Destination} = Signature) ->
-    io:format("entering blocking call to ~s:~s in function ~s:~s line ~b with destination ~p~n", [TargetMod, TargetFun, Module, Function, Line, Destination]),
+    io:format("~p entering blocking call to ~s:~s in function ~s:~s line ~b with destination ~p~n", [self(), TargetMod, TargetFun, Module, Function, Line, Destination]),
     %% search for someone in the chain that is calling us
     check_loop(self(), Destination),
     erlang:put('__alexander', Signature),
     ok.
 
 exit() ->
-    io:format("exiting blocking call~n"),
+    io:format("~p exiting blocking call~n", [self()]),
     erlang:erase('__alexander'),
     ok.
 

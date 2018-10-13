@@ -3,7 +3,7 @@
 
 -behaviour(gen_server).
 
--export([start_link/0, blocking_call/1, blocking_call/0, blocking_infinite_call/1, blocking_timeout_call/1, recursive_call/1]).
+-export([start_link/0, blocking_call/2, blocking_call/1, blocking_infinite_call/2, blocking_timeout_call/2, recursive_call/1]).
 
 %% gen_server callbacks
 -export([init/1,
@@ -17,19 +17,19 @@
 -record(state, {}).
 
 start_link() ->
-    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link(?MODULE, [], []).
 
-blocking_call(Pid) ->
-    gen_server:call(Pid, hello).
+blocking_call(Pid, Cmd) ->
+    gen_server:call(Pid, Cmd).
 
-blocking_call() ->
-    gen_server:call(?MODULE, hello).
+blocking_call(Cmd) ->
+    gen_server:call(?MODULE, Cmd).
 
-blocking_infinite_call(Pid) ->
-    gen_server:call(Pid, hello, infinity).
+blocking_infinite_call(Pid, Cmd) ->
+    gen_server:call(Pid, Cmd, infinity).
 
-blocking_timeout_call(Pid) ->
-    gen_server:call(Pid, hello, 500).
+blocking_timeout_call(Pid, Cmd) ->
+    gen_server:call(Pid, Cmd, 500).
 
 recursive_call(Pid) ->
     gen_server:call(Pid, recurse).
@@ -39,6 +39,10 @@ init([]) ->
 
 handle_call(recurse, _From, State) ->
     {reply, recursive_call(self()), State};
+handle_call([ok], _From, State) ->
+    {reply, ok, State};
+handle_call([Pid|Tail], _From, State) ->
+    {reply, blocking_call(Pid, Tail), State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 
