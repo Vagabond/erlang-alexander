@@ -1,12 +1,13 @@
 -module(alexander_SUITE).
 
 -export([all/0]).
--export([non_loop/1, loop/1]).
+-export([non_loop/1, loop/1, recursive_call/1]).
 
 all() ->
     [
      non_loop,
-     loop
+     loop,
+     recursive_call
     ].
 
 non_loop(_) ->
@@ -40,4 +41,13 @@ loop(_) ->
     end,
     [gen_server:stop(P) || P <- [Pid1, Pid2, Pid3, Pid4], is_process_alive(P)].
 
-
+recursive_call(_) ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = gen_server_test:start_link(),
+    try gen_server_test:recursive_call(Pid) of
+        _ ->
+            ct:fail(did_not_crash)
+    catch
+        What:Why ->
+            ct:pal("~p ~p", [What, Why])
+    end.

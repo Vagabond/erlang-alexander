@@ -7,7 +7,7 @@
 %% API functions
 %%====================================================================
 
-parse_transform(AST, _Options) ->
+parse_transform(AST, Options) ->
     put(targets, [{gen_server, call, 2},
                   {gen_server, call, 3},
                   {gen_fsm, sync_send_event, 2},
@@ -20,10 +20,20 @@ parse_transform(AST, _Options) ->
                   {sys, get_state, 2},
                   {sys, get_status, 1},
                   {sys, get_status, 2},
+                  {gen_event, call, 3},
+                  {gen_event, call, 4},
                   {gen_event, sync_notify, 2},
                   {gen_event, which_handlers, 1}
                  ]),
-    walk_ast([], AST).
+    %% run any other parse transforms first
+    NewAST = lists:foldl(fun({parse_transform, alexander}, Acc) ->
+                                 Acc;
+                            ({parse_transform, Transform}, Acc) ->
+                                 Transform:parse_transform(Acc, Options -- [{parse_transform, alexander}]);
+                            (_, Acc) ->
+                                 Acc
+                         end, AST, Options),
+    walk_ast([], NewAST).
 
 check() ->
     true.
@@ -72,7 +82,7 @@ transform_statement({call, Line, {remote, _Line1, {atom, _Line2, Module},
     Signature = {Module, Function, length(Arguments0)},
     case lists:member(Signature, Targets) of
         true ->
-            {Destination, NewStmt} = extract(Signature, Line, Arguments0),
+            Destination = extract(Signature, Arguments0),
             %io:format("detected signature on line ~p ~p~n", [Line, Arguments0]),
             %% use a try/after to install the metadata, run the code, return the actual value we expect, and remove the metadata once the call has completed
             {'try',Line,
@@ -80,7 +90,7 @@ transform_statement({call, Line, {remote, _Line1, {atom, _Line2, Module},
                    [{clause,Line,
                         [{var,Line,'_'}],
                         [],
-                        [NewStmt]}],
+                        [Stmt]}],
                    [],
                    [{call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, exit}},[]}]};
         false ->
@@ -93,23 +103,24 @@ transform_statement(Stmt, Targets) when is_list(Stmt) ->
 transform_statement(Stmt, _Targets) ->
     Stmt.
 
-extract({gen_server, call, _}, Line, [Destination, Msg|_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, gen_server}, {atom, Line, call}}, [Destination, Msg, {atom, Line, infinity}]}};
-extract({gen_fsm, sync_send_event, _}, Line, [Destination, Msg |_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, gen_fsm}, {atom, Line, sync_send_event}}, [Destination, Msg, {atom, Line, infinity}]}};
-extract({gen_fsm, sync_send_all_state_event, _}, Line, [Destination, Msg |_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, gen_fsm}, {atom, Line, syns_send_all_state_event}}, [Destination, Msg, {atom, Line, infinity}]}};
-extract({gen_statem, call, _}, Line, [Destination, Msg |_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, gen_statem}, {atom, Line, call}}, [Destination, Msg, {atom, Line, infinity}]}};
-extract({sys, get_state, _}, Line, [Destination |_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_state}}, [Destination, {atom, Line, infinity}]}};
-extract({sys, get_status, _}, Line, [Destination |_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, [Destination, {atom, Line, infinity}]}};
-extract({gen_event, sync_notify, 2}, Line, Arguments = [Destination, _]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, Arguments}};
-extract({gen_event, which_handlers, 1}, Line, Arguments = [Destination]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, Arguments}}.
-
+extract({gen_server, call, _}, [Destination|_Tail]) ->
+    Destination;
+extract({gen_fsm, sync_send_event, _}, [Destination|_Tail]) ->
+    Destination;
+extract({gen_fsm, sync_send_all_state_event, _}, [Destination|_]) ->
+    Destination;
+extract({gen_statem, call, _}, [Destination|_]) ->
+    Destination;
+extract({sys, get_state, _}, [Destination |_]) ->
+    Destination;
+extract({sys, get_status, _}, [Destination |_]) ->
+    Destination;
+extract({gen_event, call, _}, [Destination|_]) ->
+    Destination;
+extract({gen_event, sync_notify, 2}, [Destination, _]) ->
+    Destination;
+extract({gen_event, which_handlers, 1}, [Destination]) ->
+    Destination.
 
 check_loop(Source, [{_TargetMod, _TargetFun, _Module, _Function, _Line, Destination}|_]=Stack) ->
     Pid = case Destination of
@@ -122,12 +133,16 @@ check_loop(Source, [{_TargetMod, _TargetFun, _Module, _Function, _Line, Destinat
         false ->
             ok
     end,
-    [{dictionary, Dict}] = erlang:process_info(Pid, [dictionary]),
-    case lists:keyfind('__alexander', 1, Dict) of
-        false ->
-            ok;
-        {'__alexander', {_NewTargetMod, _NewTargetFun, _NewModule, _NewFunction, _NewLine, _NewDestination}=AlexanderTuple} ->
-            check_loop(Source, [AlexanderTuple|Stack])
+    case erlang:process_info(Pid, [dictionary]) of
+        [{dictionary, Dict}] ->
+            case lists:keyfind('__alexander', 1, Dict) of
+                false ->
+                    ok;
+                {'__alexander', {_NewTargetMod, _NewTargetFun, _NewModule, _NewFunction, _NewLine, _NewDestination}=AlexanderTuple} ->
+                    check_loop(Source, [AlexanderTuple|Stack])
+            end;
+        _ ->
+            ok
     end.
 
 unwind_stack(Stack) ->

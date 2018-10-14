@@ -26,9 +26,6 @@ blocked making a call of its own. If B is blocked we follow the chain of
 processes until we run out of processes to follow, or we find a loop. If a loop
 is detected, an exception is thrown.
 
-If the blocking call has a timeout associated, Alexander rewrites the timeout
-to infinity so that it will find racy deadlocks.
-
 How to use it
 ===========
 
@@ -50,5 +47,10 @@ compile time, so you might want to use something like rebar3's overrides
 feature:
 
 ```erlang
-{overrides, [{override, [{erl_opts, [{parse_transform, alexander}]}]}]}.
+{overrides, [{add, [{erl_opts, [{parse_transform, alexander}]}]}]}.
 ```
+
+For this to work you likely need a compiled copy of alexander in your OTP code
+path somewhere. If you are using other parse transforms, Alexander will try to
+run them for you before applying its own transform. This should work for most
+use cases but it is not well tested.
