@@ -9,7 +9,19 @@
 
 parse_transform(AST, _Options) ->
     put(targets, [{gen_server, call, 2},
-                  {gen_server, call, 3}
+                  {gen_server, call, 3},
+                  {gen_fsm, sync_send_event, 2},
+                  {gen_fsm, sync_send_event, 3},
+                  {gen_fsm, sync_send_all_state_event, 2},
+                  {gen_fsm, sync_send_all_state_event, 3},
+                  {gen_statem, call, 2},
+                  {gen_statem, call, 3},
+                  {sys, get_state, 1},
+                  {sys, get_state, 2},
+                  {sys, get_status, 1},
+                  {sys, get_status, 2},
+                  {gen_event, sync_notify, 2},
+                  {gen_event, which_handlers, 1}
                  ]),
     walk_ast([], AST).
 
@@ -62,10 +74,15 @@ transform_statement({call, Line, {remote, _Line1, {atom, _Line2, Module},
         true ->
             {Destination, NewStmt} = extract(Signature, Line, Arguments0),
             io:format("detected signature on line ~p ~p~n", [Line, Arguments0]),
-            lists:reverse([{call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, enter}},
-              [{tuple, Line, [{atom, Line, Module}, {atom, Line, Function}, {atom, Line, get(module)}, {atom, Line, get(function)}, {integer, Line, Line}, Destination]}]},
-              NewStmt,
-            {call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, exit}},[]}]);
+            %% use a try/after to install the metadata, run the code, return the actual value we expect, and remove the metadata once the call has completed
+            {'try',Line,
+                   [{call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, enter}}, [{tuple, Line, [{atom, Line, Module}, {atom, Line, Function}, {atom, Line, get(module)}, {atom, Line, get(function)}, {integer, Line, Line}, Destination]}]}],
+                   [{clause,Line,
+                        [{var,Line,'_'}],
+                        [],
+                        [NewStmt]}],
+                   [],
+                   [{call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, exit}},[]}]};
         false ->
             list_to_tuple(transform_statement(tuple_to_list(Stmt), Targets))
     end;
@@ -76,10 +93,22 @@ transform_statement(Stmt, Targets) when is_list(Stmt) ->
 transform_statement(Stmt, _Targets) ->
     Stmt.
 
-extract({gen_server, call, 2}, Line, Arguments = [Destination, _Msg]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, gen_server}, {atom, Line, call}}, Arguments ++ [{atom, Line, infinity}]}};
-extract({gen_server, call, 3}, Line, [Destination, Msg |_]) ->
-    {Destination, {call, Line, {remote, Line, {atom, Line, gen_server}, {atom, Line, call}}, [Destination, Msg, {atom, Line, infinity}]}}.
+extract({gen_server, call, _}, Line, [Destination, Msg|_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, gen_server}, {atom, Line, call}}, [Destination, Msg, {atom, Line, infinity}]}};
+extract({gen_fsm, sync_send_event, _}, Line, [Destination, Msg |_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, gen_fsm}, {atom, Line, sync_send_event}}, [Destination, Msg, {atom, Line, infinity}]}};
+extract({gen_fsm, sync_send_all_state_event, _}, Line, [Destination, Msg |_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, gen_fsm}, {atom, Line, syns_send_all_state_event}}, [Destination, Msg, {atom, Line, infinity}]}};
+extract({gen_statem, call, _}, Line, [Destination, Msg |_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, gen_statem}, {atom, Line, call}}, [Destination, Msg, {atom, Line, infinity}]}};
+extract({sys, get_state, _}, Line, [Destination |_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_state}}, [Destination, {atom, Line, infinity}]}};
+extract({sys, get_status, _}, Line, [Destination |_]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, [Destination, {atom, Line, infinity}]}};
+extract({gen_event, sync_notify, 2}, Line, Arguments = [Destination, _]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, Arguments}};
+extract({gen_event, which_handlers, 1}, Line, Arguments = [Destination]) ->
+    {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, Arguments}}.
 
 
 check_loop(Source, Destination) ->
