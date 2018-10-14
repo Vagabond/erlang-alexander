@@ -39,10 +39,10 @@ init([]) ->
 
 handle_call(recurse, _From, State) ->
     {reply, recursive_call(self()), State};
-handle_call([ok], _From, State) ->
-    {reply, ok, State};
-handle_call([Pid|Tail], _From, State) ->
-    {reply, blocking_call(Pid, Tail), State};
+handle_call([Result], _From, State) ->
+    {reply, Result, State};
+handle_call([{Module, Pid}|Tail], _From, State) ->
+    {reply, Module:blocking_call(Pid, Tail), State};
 handle_call(_Request, _From, State) ->
     {reply, ignored, State}.
 

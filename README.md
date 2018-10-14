@@ -29,7 +29,26 @@ is detected, an exception is thrown.
 If the blocking call has a timeout associated, Alexander rewrites the timeout
 to infinity so that it will find racy deadlocks.
 
-Build
------
+How to use it
+===========
 
-    $ rebar3 compile
+Simply enable the parse transform on the modules you want to check for call
+cycles:
+
+```erlang
+-compile([{parse_transform, alexander}]).
+```
+
+Or use it in your Erlang compiler flags:
+
+```
+{parse_transform, alexander}
+```
+
+Alexander can only see call cycles between processes it has transformed at
+compile time, so you might want to use something like rebar3's overrides
+feature:
+
+```erlang
+{overrides, [{override, [{erl_opts, [{parse_transform, alexander}]}]}]}.
+```

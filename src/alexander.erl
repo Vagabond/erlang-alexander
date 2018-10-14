@@ -28,15 +28,15 @@ parse_transform(AST, _Options) ->
 check() ->
     true.
 
-enter({TargetMod, TargetFun, Module, Function, Line, Destination} = Signature) ->
-    io:format("~p entering blocking call to ~s:~s in function ~s:~s line ~b with destination ~p~n", [self(), TargetMod, TargetFun, Module, Function, Line, Destination]),
+enter({_TargetMod, _TargetFun, _Module, _Function, _Line, _Destination} = Signature) ->
+    %io:format("~p entering blocking call to ~s:~s in function ~s:~s line ~b with destination ~p~n", [self(), TargetMod, TargetFun, Module, Function, Line, Destination]),
     %% search for someone in the chain that is calling us
-    check_loop(self(), Destination),
+    check_loop(self(), [Signature]),
     erlang:put('__alexander', Signature),
     ok.
 
 exit() ->
-    io:format("~p exiting blocking call~n", [self()]),
+    %io:format("~p exiting blocking call~n", [self()]),
     erlang:erase('__alexander'),
     ok.
 
@@ -73,7 +73,7 @@ transform_statement({call, Line, {remote, _Line1, {atom, _Line2, Module},
     case lists:member(Signature, Targets) of
         true ->
             {Destination, NewStmt} = extract(Signature, Line, Arguments0),
-            io:format("detected signature on line ~p ~p~n", [Line, Arguments0]),
+            %io:format("detected signature on line ~p ~p~n", [Line, Arguments0]),
             %% use a try/after to install the metadata, run the code, return the actual value we expect, and remove the metadata once the call has completed
             {'try',Line,
                    [{call, Line, {remote, Line, {atom, Line, ?MODULE}, {atom, Line, enter}}, [{tuple, Line, [{atom, Line, Module}, {atom, Line, Function}, {atom, Line, get(module)}, {atom, Line, get(function)}, {integer, Line, Line}, Destination]}]}],
@@ -111,14 +111,14 @@ extract({gen_event, which_handlers, 1}, Line, Arguments = [Destination]) ->
     {Destination, {call, Line, {remote, Line, {atom, Line, sys}, {atom, Line, get_status}}, Arguments}}.
 
 
-check_loop(Source, Destination) ->
+check_loop(Source, [{_TargetMod, _TargetFun, _Module, _Function, _Line, Destination}|_]=Stack) ->
     Pid = case Destination of
               D when is_pid(D) -> D;
               D when is_atom(D) -> whereis(D)
           end,
     case Pid == Source of
         true ->
-            erlang:throw(call_loop_detected);
+            erlang:error({call_loop_detected, unwind_stack(Stack)});
         false ->
             ok
     end,
@@ -126,7 +126,15 @@ check_loop(Source, Destination) ->
     case lists:keyfind('__alexander', 1, Dict) of
         false ->
             ok;
-        {'__alexander', {_TargetMod, _TargetFun, _Module, _Function, _Line, NewDestination}} ->
-            check_loop(Source, NewDestination)
+        {'__alexander', {_NewTargetMod, _NewTargetFun, _NewModule, _NewFunction, _NewLine, _NewDestination}=AlexanderTuple} ->
+            check_loop(Source, [AlexanderTuple|Stack])
     end.
 
+unwind_stack(Stack) ->
+    unwind_stack(Stack, []).
+
+unwind_stack([], Acc) ->
+    lists:flatten(Acc);
+unwind_stack([{TargetMod, TargetFun, Module, Function, Line, Destination}|Tail], Acc) ->
+    E = io_lib:format("From ~s:~s(~p) in ~s:~s line ~b~n", [TargetMod, TargetFun, Destination, Module, Function, Line]),
+    unwind_stack(Tail, [E|Acc]).
